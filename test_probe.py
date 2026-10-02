@@ -1,7 +1,8 @@
 import hashlib
+import http.client
 import os
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 import probe
 
 
@@ -42,6 +43,35 @@ class ProbeChecks(unittest.TestCase):
         self.assertFalse(probe.validate_identity(payload, 'TEST-HOST-B', 'test-user'))
         self.assertFalse(probe.validate_identity(payload, 'TEST-HOST-A', 'other-user'))
         self.assertFalse(probe.validate_identity([], 'TEST-HOST-A', 'test-user'))
+
+    def test_https_proxy_transport_closes_on_certificate_mismatch(self):
+        original = b'the authorized certificate'
+        pin = hashlib.sha256(original).hexdigest()
+        verification = {'validated': False}
+        connection = probe.PinnedHTTPSConnection('gateway.example.invalid', pin=pin,
+                                                 verification=verification)
+        connection.sock = Mock()
+        connection.sock.getpeercert.return_value = b'an unauthorized substitute'
+        with patch.object(http.client.HTTPSConnection, 'connect'), \
+             patch.object(connection, 'close') as close:
+            with self.assertRaises(probe.CertificatePinError):
+                connection.connect()
+            close.assert_called_once()
+            self.assertFalse(verification['validated'])
+
+    def test_https_proxy_transport_accepts_only_the_pinned_certificate(self):
+        original = b'the authorized certificate'
+        pin = hashlib.sha256(original).hexdigest()
+        verification = {'validated': False}
+        connection = probe.PinnedHTTPSConnection('gateway.example.invalid', pin=pin,
+                                                 verification=verification)
+        connection.sock = Mock()
+        connection.sock.getpeercert.return_value = original
+        with patch.object(http.client.HTTPSConnection, 'connect'), \
+             patch.object(connection, 'close') as close:
+            connection.connect()
+            close.assert_not_called()
+            self.assertTrue(verification['validated'])
 
 
 if __name__ == '__main__':

@@ -5,6 +5,7 @@ import base64
 from datetime import datetime, timezone
 import hashlib
 import hmac
+import http.client
 import json
 import os
 from pathlib import Path
@@ -35,6 +36,44 @@ def check_pin(certificate, expected):
     if not hmac.compare_digest(actual, normalize_pin(expected)):
         raise CertificatePinError('The gateway certificate does not match the expected SHA256')
     return actual
+
+
+class PinnedHTTPSConnection(http.client.HTTPSConnection):
+    def __init__(self, host, *, pin, verification=None, **kwargs):
+        self.pin = normalize_pin(pin)
+        self.verification = verification if verification is not None else {}
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+        kwargs['context'] = context
+        super().__init__(host, **kwargs)
+
+    def connect(self):
+        super().connect()
+        try:
+            check_pin(self.sock.getpeercert(binary_form=True), self.pin)
+            self.verification['validated'] = True
+        except Exception:
+            self.close()
+            raise
+
+
+class PinnedHTTPSHandler(urllib.request.HTTPSHandler):
+    def __init__(self, pin, verification=None):
+        self.pin = normalize_pin(pin)
+        self.verification = verification if verification is not None else {}
+        super().__init__()
+
+    def https_open(self, request):
+        def connect(host, **kwargs):
+            return PinnedHTTPSConnection(host, pin=self.pin,
+                                         verification=self.verification, **kwargs)
+        return self.do_open(connect, request)
+
+
+class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, request, fp, code, message, headers, newurl):
+        return None
 
 
 def redact(value):
@@ -79,6 +118,26 @@ def gateway_check(host, port, pin, timeout):
     except (OSError, CertificatePinError) as exc:
         return {'tlsEstablished': False, 'certificateValidated': False,
                 'error': str(exc)[:500], 'vpnCredentialsSent': False}
+
+
+def gateway_http_check(host, port, pin, timeout):
+    request = urllib.request.Request('https://{}:{}/'.format(host, port), method='GET')
+    verification = {'validated': False if pin else None}
+    handlers = [NoRedirectHandler()]
+    if pin:
+        handlers.append(PinnedHTTPSHandler(pin, verification))
+    opener = urllib.request.build_opener(*handlers)
+    try:
+        with opener.open(request, timeout=timeout) as response:
+            return {'httpStatus': response.status, 'certificateValidated': True,
+                    'vpnCredentialsSent': False}
+    except urllib.error.HTTPError as exc:
+        # An HTTP rejection or redirect still follows validated TLS.
+        return {'httpStatus': exc.code, 'certificateValidated': True,
+                'vpnCredentialsSent': False}
+    except (OSError, ValueError, urllib.error.URLError, CertificatePinError) as exc:
+        return {'certificateValidated': verification['validated'], 'error': str(exc)[:500],
+                'vpnCredentialsSent': False}
 
 
 def validate_identity(payload, expected_host, expected_user):
@@ -180,7 +239,9 @@ def main():
               'gateway': {'host': args.gateway, 'port': args.port,
                           'tcp': tcp_check(args.gateway, args.port, args.timeout),
                           'tls': gateway_check(args.gateway, args.port,
-                                               args.cert_sha256, args.timeout)},
+                                               args.cert_sha256, args.timeout),
+                          'httpWithConfiguredProxySettings': gateway_http_check(
+                              args.gateway, args.port, args.cert_sha256, args.timeout)},
               'vpnAuthenticationAttempted': False, 'targets': []}
     for url, expected_host in zip(args.targets, expected_hosts):
         parsed = urllib.parse.urlsplit(url)

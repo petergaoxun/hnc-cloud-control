@@ -30,7 +30,7 @@ python3 probe.py --origin codex-cloud --gateway "$VPN_GATEWAY" --port "$VPN_PORT
 
 Use a certificate pin obtained through a trusted source. With no pin supplied, the probe uses the system CA store and hostname verification. A certificate mismatch stops the TLS probe; no VPN credentials are sent by this script.
 
-The report records runtime capabilities, proxy presence, available clients, gateway TCP/TLS reachability, and target TCP/HTTP reachability. HTTP probes respect the configured cloud proxy. A missing TUN device or capability is evidence to investigate, not proof that all possible clients are unsupported.
+The report records runtime capabilities, proxy presence, available clients, direct gateway TCP/TLS reachability, an HTTPS gateway request using configured proxy settings, and target TCP/HTTP reachability. Both gateway and service HTTP probes respect the configured cloud proxy. A missing TUN device or capability is evidence to investigate, not proof that all possible clients are unsupported.
 
 The script does not authenticate a VPN. A public gateway response or an HTTP 401 is not evidence of a successful VPN login. `--origin` records the caller's declared execution location; it does not attest to that location, so retain the actual Cloud task ID alongside the report.
 
@@ -50,7 +50,7 @@ If the custom client cannot run in the runtime, retain the concrete limitation. 
 python3 -m unittest -v test_probe.py
 ```
 
-Checks cover certificate substitution rejection, malformed pins, credential redaction, missing credentials, embedded-password URLs, and wrong host/user identities. Local checks validate this diagnostic script, not a Cloud VPN connection.
+Checks cover certificate substitution rejection on both direct and proxy-capable HTTPS transports, malformed pins, credential redaction, missing credentials, embedded-password URLs, and wrong host/user identities. Local checks validate this diagnostic script, not a Cloud VPN connection.
 
 ## References
 
